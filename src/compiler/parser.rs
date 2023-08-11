@@ -15,7 +15,7 @@ pub static KEYWORDS: phf::Map<&'static str, TokenType> = phf_map! {
     "use" => TokenType::Use,
     "return" => TokenType::Return,
     "true" => TokenType::True,
-    "flase" => TokenType::False,
+    "false" => TokenType::False,
     "bit" => TokenType::Bit,
     "bit8" => TokenType::Bit8,
     "bit16" => TokenType::Bit16,
@@ -45,6 +45,7 @@ pub enum LexingError {
     MultipleDecimalPoints,
     DecimalParsing,
     BitsParsing,
+    IntegerParsing,
     UnknownToken,
     End,
     InvalidEscapeSequence,
@@ -66,6 +67,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    pub fn position(&self) -> &Position {
+        &self.position
+    }
+
     fn increment(&mut self) -> Option<char> {
         let current = self.iterator.next();
         if let None = current {
@@ -81,15 +86,12 @@ impl<'a> Lexer<'a> {
         Some(current)
     }
 
-    fn next_numeric(&mut self, mut current: char) -> Result<TokenType, LexingError> {
-        #[derive(PartialEq)]
-        enum Type {
-            Bits,
-            Decimal,
-        }
-
+    fn next_numeric(
+        &mut self,
+        mut current: char,
+        mut r#type: TokenType,
+    ) -> Result<TokenType, LexingError> {
         let mut buffer = String::new();
-        let mut r#type = Type::Bits;
 
         loop {
             buffer.push(current);
@@ -101,31 +103,45 @@ impl<'a> Lexer<'a> {
 
             current = i.unwrap();
             if current == '.' {
-                if r#type == Type::Decimal {
+                if r#type == TokenType::DecimalLiteral {
                     return Err(LexingError::MultipleDecimalPoints);
                 }
-                r#type = Type::Decimal;
+                r#type = TokenType::DecimalLiteral;
+            } else if !current.is_numeric() {
+                break;
             }
         }
 
-        if r#type == Type::Decimal {
-            let decimal = buffer.parse::<f64>();
-            if let Err(_) = decimal {
-                Err(LexingError::DecimalParsing)
-            } else {
-                Ok(TokenType::Decimal(decimal.unwrap()))
+        match r#type {
+            TokenType::DecimalLiteral => {
+                let decimal = buffer.parse::<f64>();
+                if let Err(_) = decimal {
+                    Err(LexingError::DecimalParsing)
+                } else {
+                    Ok(TokenType::Decimal(decimal.unwrap()))
+                }
             }
-        } else {
-            let bits = buffer.parse::<u64>();
-            if let Err(_) = bits {
-                Err(LexingError::BitsParsing)
-            } else {
-                Ok(TokenType::Bits(bits.unwrap()))
+            TokenType::BitsLiteral => {
+                let bits = buffer.parse::<u64>();
+                if let Err(_) = bits {
+                    Err(LexingError::BitsParsing)
+                } else {
+                    Ok(TokenType::Bits(bits.unwrap()))
+                }
             }
+            TokenType::IntegerLiteral => {
+                let integer = buffer.parse::<i64>();
+                if let Err(_) = integer {
+                    Err(LexingError::IntegerParsing)
+                } else {
+                    Ok(TokenType::Integer(integer.unwrap()))
+                }
+            }
+            _ => unreachable!(),
         }
     }
 
-    fn next_character(&mut self) -> Result<char, LexingError> {
+    fn next_character(&mut self) -> Result<(bool, char), LexingError> {
         let current = self.increment();
         if let None = current {
             return Err(LexingError::End);
@@ -133,7 +149,7 @@ impl<'a> Lexer<'a> {
         let mut current = current.unwrap();
 
         if current != '\\' {
-            return Ok(current);
+            return Ok((false, current));
         }
 
         let result = self.increment();
@@ -147,7 +163,7 @@ impl<'a> Lexer<'a> {
             _ => return Err(LexingError::InvalidEscapeSequence),
         };
 
-        Ok(result)
+        Ok((true, result))
     }
 }
 
@@ -184,10 +200,9 @@ impl<'a> Iterator for Lexer<'a> {
         // Match the start symbol.
         token.r#type = match current {
             '\'' => match self.next_character() {
-                Ok(mut ok) => {
-                    if ok == '\'' {
-                        ok = 0 as char;
-                        self.increment();
+                Ok((is_escaped, mut ok)) => {
+                    if ok == '\'' && !is_escaped {
+                        ok = '\0';
                     } else {
                         let current = self.increment();
                         if let None = current {
@@ -195,6 +210,8 @@ impl<'a> Iterator for Lexer<'a> {
                         }
 
                         let current = current.unwrap();
+                        println!("{:?} {:?}", ok, current);
+
                         if current != '\'' {
                             return Some(Err(LexingError::IncompleteCharacter));
                         }
@@ -211,12 +228,6 @@ impl<'a> Iterator for Lexer<'a> {
             '"' => {
                 let mut buffer = String::new();
                 loop {
-                    if let Some(c) = self.iterator.clone().peekable().peek() {
-                        if *c == '\"' {
-                            self.increment();
-                            break;
-                        }
-                    }
                     let current = self.next_character();
                     if let Err(e) = current {
                         if e != LexingError::End {
@@ -224,7 +235,11 @@ impl<'a> Iterator for Lexer<'a> {
                         }
                         return Some(Err(LexingError::IncompleteString));
                     }
-                    let current = current.unwrap();
+
+                    let (is_escaped, current) = current.unwrap();
+                    if current == '"' && !is_escaped {
+                        break;
+                    }
                     buffer.push(current);
                 }
 
@@ -241,7 +256,7 @@ impl<'a> Iterator for Lexer<'a> {
             '+' => {
                 if let Some(next) = self.iterator.clone().peekable().peek() {
                     if next.is_numeric() {
-                        let result = self.next_numeric(current);
+                        let result = self.next_numeric(current, TokenType::IntegerLiteral);
                         if let Err(e) = result {
                             return Some(Err(e));
                         }
@@ -256,9 +271,10 @@ impl<'a> Iterator for Lexer<'a> {
             '-' => {
                 if let Some(next) = self.iterator.clone().peekable().peek() {
                     if *next == '>' {
+                        self.increment();
                         TokenType::RightwardsArrow
                     } else if next.is_numeric() {
-                        let result = self.next_numeric(current);
+                        let result = self.next_numeric(current, TokenType::IntegerLiteral);
                         if let Err(e) = result {
                             return Some(Err(e));
                         }
@@ -288,7 +304,7 @@ impl<'a> Iterator for Lexer<'a> {
             ']' => TokenType::RightSquareBracket,
             _ => {
                 if current.is_numeric() {
-                    let result = self.next_numeric(current);
+                    let result = self.next_numeric(current, TokenType::BitsLiteral);
                     if let Err(e) = result {
                         return Some(Err(e));
                     }
@@ -331,18 +347,95 @@ impl<'a> Iterator for Lexer<'a> {
 
 #[test]
 pub fn test_lexer() {
-    // use std::env;
     use std::{fs::File, io::Read};
     let mut file = File::open("/home/k/projects/xic/tests/lexing_test_file.xi").unwrap();
     let mut buffer = String::new();
     file.read_to_string(&mut buffer).unwrap();
 
+    let tokens = vec![
+        // TokenType::Bits(u64),
+        // TokenType::Integer(i64),
+        // TokenType::Decimal(f64),
+        // TokenType::Boolean(bool),
+        TokenType::Integer(21),
+        TokenType::Integer(-21),
+        TokenType::Decimal(21.21),
+        TokenType::Bits(21),
+        TokenType::Boolean(true),
+        TokenType::Boolean(false),
+        TokenType::Identifier(String::from("C_oolIdentifier32_")),
+        TokenType::Character('\0'),
+        TokenType::String(String::from("\0")),
+        TokenType::Character('\''),
+        TokenType::String(String::from("Hello,\'\" World!")),
+        TokenType::Module,
+        TokenType::Trait,
+        TokenType::Type,
+        TokenType::Extend,
+        TokenType::Function,
+        TokenType::Value,
+        TokenType::Use,
+        TokenType::Return,
+        TokenType::Bit,
+        TokenType::Bit8,
+        TokenType::Bit16,
+        TokenType::Bit32,
+        TokenType::Bit64,
+        TokenType::Int,
+        TokenType::Int8,
+        TokenType::Int16,
+        TokenType::Int32,
+        TokenType::Int64,
+        TokenType::Float,
+        TokenType::Float8,
+        TokenType::Float16,
+        TokenType::Float32,
+        TokenType::Float64,
+        TokenType::Bool,
+        TokenType::Char,
+        TokenType::Char8,
+        TokenType::Char16,
+        TokenType::Char32,
+        TokenType::FullStop,
+        TokenType::Comma,
+        TokenType::Colon,
+        TokenType::Semicolon,
+        TokenType::EqualsSign,
+        TokenType::PlusSign,
+        TokenType::MinuxSign,
+        TokenType::Asterisk,
+        TokenType::Solidus,
+        TokenType::ReverseSolidus,
+        TokenType::VerticalLine,
+        TokenType::ExclamationMark,
+        TokenType::QuestionMark,
+        TokenType::ComercialAt,
+        TokenType::NumberSign,
+        TokenType::RightwardsArrow,
+        TokenType::LeftCurlyBracket,
+        TokenType::RightCurlyBracket,
+        TokenType::LeftParenthesis,
+        TokenType::RightParenthesis,
+        TokenType::LeftAngleBracket,
+        TokenType::RightAngleBracket,
+        TokenType::LeftSquareBracket,
+        TokenType::RightSquareBracket,
+    ];
+
     let mut lexer = Lexer::new(buffer.chars());
-    while let Some(token) = lexer.next() {
-        match token {
-            Ok(token) => println!("{:?}", token),
-            Err(error) => println!("{:?}", error),
+    for token in tokens {
+        if let Some(result) = lexer.next() {
+            if let Ok(result) = result {
+                println!("Expected: {:?}, Recieved: {:?}", token, result.r#type);
+                if result.r#type != token {
+                    panic!();
+                }
+            } else {
+                println!("{:?} {:?}", lexer.position(), result);
+                panic!();
+            }
+        } else {
+            break;
         }
     }
-    panic!();
 }

@@ -112,6 +112,9 @@ pub enum TokenType {
     Boolean(bool),
     String(String),
     Character(char),
+    BitsLiteral,
+    IntegerLiteral,
+    DecimalLiteral,
 
     //
     // Words

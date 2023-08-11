@@ -1,3 +1,10 @@
++21
+-21
+21.21
+21
+true
+false
+C_oolIdentifier32_
 ''
 ""
 '\''
