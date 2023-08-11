@@ -1,0 +1,96 @@
+tagged-type ::= identifier':' type
+
+type ::= tuple-type
+       | enumerated-type
+       | union-type
+       | array-type
+       | function-type
+       | tagged-type
+       | packed-type
+       | pointer-type
+
+pointer-type ::= '@' type
+
+packed-type ::= type '...'
+
+enumerated-type ::= type '|' type
+
+union-type ::= type '+' type
+
+array-type ::= type '*' unsigned-integral-constant
+
+tuple-type ::= type [',' type]
+
+function-type ::= tuple-type '-' type
+
+initializer ::= '{' expression* '}'
+
+type-declaration ::= 'type' identifier template '=' type
+
+trait-declaration ::= 'trait' identifier template body
+
+type IdentifierToken = String;
+
+type TokenType = Identifier: IdentifierToken -> 0
+               | LeftCurl -> '{'
+               | RightCurl -> '}'
+               | Function: (() -> ()) -> 1;
+
+trait SomeComplexTrait<> {
+    # ...
+}
+
+trait FunctionType<...InputTypes, ReturnType> =
+    Input: type = 'InputTypes...,
+    Return: type = 'ReturnType,
+    evaluate: (Input...) -> Return;
+
+type WriteFunction<CountType: NumericType>
+    : FunctionType<String, CountType, CountType>,
+      ObjectType<()>
+{
+    type Count = CountType;
+
+    pub fn create: () -> Self
+    {
+        Self {}
+    }
+
+    pub fn destroy: (self: @Self) = ObjectType::destroy;
+
+    pub fn evaluate: (message: String, count: Count) -> Count
+    {
+        use core.io.out;
+        return out.write(message, count);
+    }
+}
+
+let Count = u64;
+
+let write_function := WriteFunction<Count>::create();
+let count := write_function.evaluate(message: "Hello, World!",
+                                     count: "Hello, World!".length);
+
+let format := format!("{}", count);
+out.write(format, format.length);
+
+type ParsingContext =
+    prior_type: TupleType
+              | ArrayType,
+    from: (TupleType: (numer: ));
+
+type MyType = OtherType;
+
+let MyType: type = OtherType;
+
+type NumericType = Integer
+                 | Decimal;
+
+type Location = line: u64, column: u64; 
+
+type Token = \type: TokenType, location: Location;
+
+let my_function: (fn: (int) -> bool) -> int;
+
+let my_value: int;
+
